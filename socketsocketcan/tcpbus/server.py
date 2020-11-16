@@ -1,11 +1,20 @@
 import socket
+import sys
+import argparse
+import struct
+import errno
 from queue import Queue
 from queue import Empty as QueueEmpty
 from threading import Thread
 import can
 from time import sleep
+import os
+
+bustype = 'socketcan'
+channel = 'can0' #This is for CAN Device on your linux operating system
 
 class TCPBus(can.BusABC):
+    FORMAT = "<IB3x8s"
     RECV_FRAME_SZ = 21
     CAN_EFF_FLAG = 0x80000000
     CAN_RTR_FLAG = 0x40000000
@@ -27,6 +36,9 @@ class TCPBus(can.BusABC):
         self._conn, addr = self._socket.accept()
         self._is_connected = True
         self._conn.settimeout(0.5) #blocking makes exiting an infinite loop hard
+        
+		#open can socket
+        self.bus = can.interface.Bus(channel=channel, bustype=bustype)
 
         #now we're connected, kick off other threads.
         self._tcp_listener = Thread(target=self._poll_socket)
@@ -34,7 +46,10 @@ class TCPBus(can.BusABC):
 
         self._tcp_writer = Thread(target=self._poll_send)
         self._tcp_writer.start()
-    
+
+        self._canbus_poller = Thread(target=self._poll_receive)
+        self._canbus_poller.start()
+
     def _recv_internal(self,timeout=None):
         #TODO: filtering shit
         return (self.recv_buffer.get(timeout=timeout), True)
@@ -46,6 +61,8 @@ class TCPBus(can.BusABC):
             msg.arbitration_id |= self.CAN_RTR_FLAG
         if msg.is_error_frame:
             msg.arbitration_id |= self.CAN_ERR_FLAG        
+        print("UMIT2: ")
+        print(msg)
         self.send_buffer.put(msg)
 
     def _stop_threads(self):
@@ -128,9 +145,16 @@ class TCPBus(can.BusABC):
                         part_formed_message = bytearray()
 
                     c = 0
+                    #print("Operation Started")
                     for _ in range(num_frames):
-                        self.recv_buffer.put(self._bytes_to_message(data[c:c+self.RECV_FRAME_SZ]))
+                        var = self._bytes_to_message(data[c:c+self.RECV_FRAME_SZ])
+                        print(var)
+                        self.recv_buffer.put(var)
+                        can_id = var.arbitration_id | self.CAN_EFF_FLAG
+                        self.bus.send(var)
                         c += self.RECV_FRAME_SZ
+                    #print("Operation Stopped")
+                
                 else:
                     #socket's been closed at the other end.
                     self._stop_threads()
@@ -141,7 +165,7 @@ class TCPBus(can.BusABC):
         with self._conn as s:
             while self._shutdown_flag.empty():
                 try:
-                    msg = self.send_buffer.get(timeout=0.02)
+                    msg = self.send_buffer.get(timeout=0.02) # Check the timeouts for high rate msgs
                     data = self._msg_to_bytes(msg)
                     while not self.send_buffer.empty(): #we know there's one message, might be more.
                         data += self._msg_to_bytes(self.send_buffer.get())
@@ -153,6 +177,21 @@ class TCPBus(can.BusABC):
                         break
                 except QueueEmpty:
                     pass #NBD, just means nothing to send.
+
+    def _poll_receive(self):
+        """background thread to get messages from canbus"""
+        with self._conn as s:
+            while self._shutdown_flag.empty():
+                try:
+                    msg = self.bus.recv(timeout=0.02) # Check the timeouts for high rate msgs
+                    if msg is not None:
+                        print("Received: ")
+                        print(msg)
+                        self.send_buffer.put(msg)
+                except:
+                    pass #NBD, just means nothing to send.
+
+
 
 
 

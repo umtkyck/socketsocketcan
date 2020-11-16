@@ -26,8 +26,8 @@ TODO: error frames aren't being looped back
 #define BUF_SZ 100000
 
 /* CONFIG PARAMETERS */
-#define DEBUG 0
-#define RECV_OWN_MSGS 1// if 1, we well receive messages we sent. useful for logging.
+#define DEBUG 			1
+#define RECV_OWN_MSGS 	1 // if 1, we well receive messages we sent. useful for logging.
 const int LOOPBACK = RECV_OWN_MSGS; 
 
 /* DEFINITIONS */
